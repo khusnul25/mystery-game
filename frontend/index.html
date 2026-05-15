@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Mystery Card: Detective Team</title>
+    <!-- Meload Socket.io Client -->
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <style>
+        :root { --accent: #e94560; --bg: #1a1a2e; --panel: #16213e; --brdr: #0f3460; }
+        * { box-sizing: border-box; }
+        body, html { 
+            margin: 0; padding: 0; height: 100%; width: 100%;
+            background: var(--bg); color: white; font-family: 'Segoe UI', sans-serif;
+            overflow: hidden; 
+        }
+
+        /* Layout Utama - Landscape Default */
+        .wrapper { display: flex; height: 100vh; width: 100vw; }
+
+        /* Sisi Kiri: Area Investigasi & Kartu */
+        .investigation-area {
+            flex: 2; display: flex; flex-direction: column;
+            border-right: 2px solid var(--brdr); padding: 20px; overflow-y: auto;
+        }
+
+        /* Sisi Kanan: Ruang Diskusi */
+        .sidebar {
+            flex: 1; display: flex; flex-direction: column;
+            background: var(--panel); min-width: 320px;
+        }
+
+        /* Grid Kartu Petunjuk */
+        .card-grid {
+            display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+            gap: 15px; margin-top: 20px;
+        }
+
+        .clue-card {
+            background: var(--panel); border: 2px solid var(--brdr); border-radius: 12px;
+            padding: 8px; font-size: 12px; text-align: center;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.3); transition: 0.3s;
+        }
+        .clue-card:hover { border-color: var(--accent); transform: translateY(-2px); }
+        .clue-card img { width: 100%; height: 100px; object-fit: cover; border-radius: 8px; margin-bottom: 8px; }
+
+        /* Sistem Chat */
+        #chat-window { flex: 1; overflow-y: auto; padding: 15px; font-size: 13px; display: flex; flex-direction: column; gap: 8px; }
+        .chat-bubble { background: rgba(255,255,255,0.05); padding: 8px 12px; border-radius: 8px; border-left: 3px solid var(--accent); }
+        .chat-input-area { padding: 12px; display: flex; gap: 8px; background: #0f3460; }
+        
+        /* Form & Input */
+        input[type="text"] { 
+            flex: 1; padding: 12px; border-radius: 8px; border: 1px solid var(--brdr); 
+            background: #0f3460; color: white; font-size: 14px; 
+        }
+        .btn {
+            background: var(--accent); color: white; border: none; padding: 12px 20px;
+            border-radius: 8px; cursor: pointer; font-weight: bold; font-size: 14px; transition: 0.3s;
+        }
+        .btn:disabled { background: #444; color: #888; cursor: not-allowed; }
+        .btn:hover:not(:disabled) { opacity: 0.9; }
+
+        /* Overlay Lobby Awal */
+        #lobby-overlay {
+            position: fixed; inset: 0; background: var(--bg);
+            display: flex; justify-content: center; align-items: center; z-index: 100;
+        }
+        .lobby-box { background: var(--panel); padding: 40px; border-radius: 20px; width: 90%; max-width: 420px; text-align: center; border: 1px solid rgba(233,69,96,0.2); }
+
+        /* Responsif untuk HP Android Tegak (Portrait) */
+        @media (orientation: portrait) {
+            .wrapper { flex-direction: column; }
+            .sidebar { height: 45%; min-width: 100%; border-top: 2px solid var(--brdr); }
+            .investigation-area { height: 55%; }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- LOBBY OVERLAY -->
+    <div id="lobby-overlay">
+        <div class="lobby-box">
+            <h1 style="color:var(--accent); margin:0 0 20px 0; font-size: 28px;">MYSTERY CARD</h1>
+            
+            <div id="setup-ui">
+                <button class="btn" style="width:100%; margin-bottom:15px;" onclick="initRoom(true)">BUAT TIM BARU</button>
+                <div style="color: #666; margin-bottom:15px;">— ATAU GABUNG TIM —</div>
+                <input type="text" id="inputCode" placeholder="Masukkan Kode Tim (6 Digit)" style="width:100%; text-align:center; margin-bottom:15px; text-transform: uppercase;">
+                <button class="btn" style="width:100%" onclick="initRoom(false)">GABUNG</button>
+            </div>
+            
+            <div id="waiting-ui" class="hidden">
+                <p style="margin:0; color:#aaa;">KODE TIM ANDA</p>
+                <h2 id="roomCodeText" style="font-size:36px; color:var(--accent); margin:10px 0;">------</h2>
+                <p id="playerCountText" style="font-weight:bold;">👥 Menunggu Anggota (1/4)...</p>
+                <p style="font-size:12px; color:#777;">Minimal 4 pemain & Maksimal 10 pemain untuk memulai.</p>
+                <button id="startBtn" class="btn" style="width:100%; margin-top:15px;" disabled onclick="startManual()">MULAI INVESTIGASI</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MAIN GAME SCREEN -->
+    <div class="wrapper">
+        <!-- SEKTOR KIRI: KASUS & KARTU -->
+        <div class="investigation-area">
+            <div style="border-bottom: 1px solid var(--brdr); padding-bottom: 15px; margin-bottom: 15px;">
+                <span id="caseNumber" style="background:var(--accent); padding:3px 8px; border-radius:4px; font-size:11px; font-weight:bold;">KASUS 1/5</span>
+                <h2 id="caseTitle" style="margin:10px 0 5px 0;">Memuat Judul Kasus...</h2>
+                <p id="caseDesc" style="font-size:14px; color:#a2a2a2; margin:0; line-height:1.4;">Deskripsi Kasus...</p>
+            </div>
+            
+            <!-- Tempat Kartu Bukti Ter-render -->
+            <div id="clue-container" class="card-grid"></div>
+
+            <!-- Kolom Input Jawaban -->
+            <div style="margin-top:auto; padding-top:20px; display:flex; gap:10px; border-top: 1px solid var(--brdr);">
+                <input type="text" id="answerInput" placeholder="Ketik nama tersangka / jawaban logis kasus ini...">
+                <button class="btn" onclick="submitAnswer()">JAWAB</button>
+            </div>
+        </div>
+
+        <!-- SEKTOR KANAN: CHAT DISKUSI -->
+        <div class="sidebar">
+            <div style="padding:15px; background:var(--brdr); font-weight:bold; font-size:14px; letter-spacing:1px; display:flex; justify-content:space-between;">
+                <span>💬 RUANG DISKUSI TIM</span>
+                <span id="roomDisplay" style="color:var(--accent)">KODE: -</span>
+            </div>
+            <div id="chat-window">
+                <div class="chat-bubble" style="border-color:#555; color:#777;">Selamat bergabung. Tunggu petunjuk dibagikan lalu diskusikan kejanggalannya di sini.</div>
+            </div>
+            <div class="chat-input-area">
+                <input type="text" id="msgInput" placeholder="Diskusikan bukti kartu Anda...">
+                <button class="btn" onclick="sendChat()">Kirim</button>
+            </div>
+        </div>
+    </div>
+
+<script>
+    // GANTI URL INI dengan URL Web Service dari Render Anda nantinya!
+    const socket = io("https://mystery-backend.onrender.com"); 
+
+    let isOwner = false;
+    let myRoomCode = "";
+    let myPlayerOrder = 1; 
+    let currentRiddleIndex = 0;
+    let activeRiddles = [];
+
+    // DATABASE 6 RIDDLE KASUS PEMBUNUHAN
+    const riddleDatabase = [
+        {
+            title: "Racun di Gelas Kaca",
+            desc: "Tuan Handoko ditemukan tewas di ruang kerjanya setelah meminum kopi. Hanya ada 3 orang di rumah.",
+            clues: [
+                "P1: Kopi diseduh oleh Pelayan pribadi pada pukul 19.00.",
+                "P2: Hasil otopsi menyatakan racun bereaksi tepat 30 menit setelah terminum.",
+                "P3: Korban dinyatakan meninggal dunia tepat pada pukul 20.00.",
+                "P4: Istri korban mengaku berada di kamar utama sepanjang malam.",
+                "P5: Ditemukan sidik jari Istri korban di gagang teko kopi dapur.",
+                "P6: Supir pribadi melihat Pelayan keluar dari ruang kerja korban pukul 19.15.",
+                "P7: Pelayan memiliki hutang besar yang baru saja lunas secara misterius.",
+                "P8: Di saku Istri ditemukan botol kecil kosong berbau zat kimia sianida."
+            ],
+            solution: "Istri"
+        },
+        {
+            title: "Tragedi Menara Lonceng",
+            desc: "Seorang penjaga menara lonceng tewas jatuh dari atas menara. Diduga didorong.",
+            clues: [
+                "P1: Lonceng besar berbunyi otomatis setiap jam menggunakan sistem mesin.",
+                "P2: Korban ditemukan tewas dengan kondisi tali jam sakunya putus.",
+                "P3: Jam saku korban berhenti berdetak tepat pada angka 15.45.",
+                "P4: Keponakan korban adalah pewaris tunggal harta tanah menara.",
+                "P5: Rekan kerja korban mengaku sedang membeli kopi di seberang jalan pada jam 15.00.",
+                "P6: Penjual kopi menyatakan rekan kerja korban datang pada pukul 15.30-16.00.",
+                "P7: Ditemukan kancing baju milik Rekan kerja di lantai atas dekat pagar pembatas.",
+                "P8: Keponakan korban terbukti memiliki alibi kuat sedang berada di luar kota."
+            ],
+            solution: "Rekan kerja"
+        },
+        {
+            title: "Misteri Pondok Salju",
+            desc: "Seorang penulis kaya tewas membeku di dalam pondok liburannya yang terkunci dari luar.",
+            clues: [
+                "P1: Perapian di dalam pondok dalam kondisi mati total tanpa sisa kayu bakar.",
+                "P2: Penjaga pondok bertugas mengirim kayu bakar setiap sore hari pukul 17.00.",
+                "P3: Teman korban berkunjung jam 14.00 dan mengaku langsung pulang karena badai.",
+                "P4: Penjaga pondok mengklaim tidak datang sore itu karena terjebak salju longsor.",
+                "P5: Di luar jendela, jejak sepatu Penjaga pondok tercetak jelas menuju gudang kayu.",
+                "P6: Gudang penyimpanan kayu bakar sengaja digembok dari luar oleh seseorang.",
+                "P7: Kunci gembok gudang kayu tersebut ditemukan di dalam saku jaket Teman korban.",
+                "P8: Korban baru saja membatalkan kontrak penerbitan buku dengan Temannya."
+            ],
+            solution: "Teman"
+        },
+        {
+            title: "Kematian sang Pianis",
+            desc: "Pianis terkenal ditemukan tak bernyawa di depan grand pianonya. Ada pesan darah berbentuk huruf 'M'.",
+            clues: [
+                "P1: Korban memiliki tiga orang dekat: Manajer, Maestra (guru), dan Montir.",
+                "P2: Hasil lab menunjukkan korban diracun melalui permukaan tuts piano khusus.",
+                "P3: Tuts piano nada 'Do' paling tinggi dilaporkan mengandung sisa racun kontak kulit.",
+                "P4: Lagu terakhir yang diciptakan korban hanya menggunakan kunci nada rendah.",
+                "P5: Manajer mengatur seluruh jadwal latihan korban di ruang piano tersebut.",
+                "P6: Maestra datang merawat piano dan melatih korban setiap sore jam 16.00.",
+                "P7: Montir memperbaiki pedal kaki piano yang rusak pada pagi hari kejadian.",
+                "P8: Ditemukan sisa sarung tangan karet robek di tempat sampah milik Manajer."
+            ],
+            solution: "Manajer"
+        },
+        {
+            title: "Pembunuhan di Dek Kapal",
+            desc: "Seorang miliarder tewas di dek kapal pesiar pribadinya saat malam badai. Senjatanya pisau.",
+            clues: [
+                "P1: Pisau lipat berlumuran darah yang digunakan adalah milik Koki kapal.",
+                "P2: Koki mengaku pisaunya hilang dari dapur sejak dua hari yang lalu.",
+                "P3: Navigator kapal melihat Kapten berada di dek atas pada waktu kejadian.",
+                "P4: Pakaian Kapten kapal ditemukan bersih tanpa bekas noda air hujan ataupun darah.",
+                "P5: Navigator memiliki luka sayat baru di telapak tangan kanannya.",
+                "P6: Di dalam kamar Navigator ditemukan jas hujan yang masih basah bersimbah darah.",
+                "P7: Korban berencana memecat Navigator karena salah menentukan rute laut.",
+                "P8: Koki kapal memiliki alibi kuat sedang memasak bersama asisten dapur."
+            ],
+            solution: "Navigator"
+        },
+        {
+            title: "Terjebak di Laboratorium",
+            desc: "Profesor Kimia ditemukan tewas terduduk akibat menghirup gas beracun eksperimennya sendiri.",
+            clues: [
+                "P1: Masker gas milik Profesor sengaja dirusak pada bagian filter udaranya.",
+                "P2: Asisten A memegang kunci cadangan laboratorium sepanjang hari.",
+                "P3: Asisten B terlihat masuk ke ruang penyimpanan peralatan medis jam 08.00 pagi.",
+                "P4: Profesor tewas saat melakukan pencampuran zat berbahaya pada pukul 10.00.",
+                "P5: Asisten A kedapatan sedang berada di kantin bersama staf lain sejak jam 09.00.",
+                "P6: Ditemukan silet pemotong di meja kerja Asisten B dengan sisa karet filter masker.",
+                "P7: Profesor sering memarahi Asisten B karena hasil risetnya yang selalu gagal.",
+                "P8: Asisten A baru bekerja selama 2 minggu dan tidak tahu formulasi gas tersebut."
+            ],
+            solution: "Asisten B"
+        }
+    ];
+
+    // INTI LOGIKA ROOM
+    function initRoom(owner) {
+        isOwner = owner;
+        const inputVal = document.getElementById('inputCode').value.trim().toUpperCase();
+        
+        myRoomCode = owner ? Math.random().toString(36).substring(2, 8).toUpperCase() : inputVal;
+        if(!owner && myRoomCode.length < 4) return alert("Masukkan kode tim yang valid!");
+
+        document.getElementById('setup-ui').classList.add('hidden');
+        document.getElementById('waiting-ui').classList.remove('hidden');
+        document.getElementById('roomCodeText').innerText = myRoomCode;
+        document.getElementById('roomDisplay').innerText = `KODE: ${myRoomCode}`;
+
+        // Kirim sinyal gabung ke server Render
+        socket.emit('joinRoom', { code: myRoomCode, isOwner });
+    }
+
+    // Mendengarkan respon server terkait urutan player & total pemain
+    socket.on('playerAssigned', (order) => {
+        myPlayerOrder = order;
+    });
+
+    socket.on('updatePlayers', (count) => {
+        document.getElementById('playerCountText').innerText = `👥 Anggota Tim (${count}/4)...`;
+        // Aktifkan tombol start hanya untuk owner jika jumlah pemain 4 - 10 orang
+        if(isOwner) {
+            document.getElementById('startBtn').disabled = (count < 4 || count > 10);
+        }
+    });
+
+    function startManual() {
+        if(isOwner) socket.emit('requestStart', myRoomCode);
+    }
+
+    // Server mengirimkan daftar 5 teka-teki acak yang terpilih
+    socket.on('gameInit', (chosenIndexes) => {
+        activeRiddles = chosenIndexes;
+        currentRiddleIndex = 0;
+        document.getElementById('lobby-overlay').classList.add('hidden');
+        loadRiddle();
+    });
+
+    // MEMUAT RIDDLE DAN MEMBAGI PETUNJUK
+    function loadRiddle() {
+        const dbIndex = activeRiddles[currentRiddleIndex];
+        const riddle = riddleDatabase[dbIndex];
+        
+        document.getElementById('caseNumber').innerText = `KASUS ${currentRiddleIndex + 1}/5`;
+        document.getElementById('caseTitle').innerText = riddle.title;
+        document.getElementById('caseDesc').innerText = riddle.desc;
+        
+        const container = document.getElementById('clue-container');
+        container.innerHTML = "";
+
+        // Distribusi Logika Petunjuk Unik (Maks 8 Petunjuk)
+        let myClues = [];
+        if (myPlayerOrder <= 4) {
+            // Player 1: Petunjuk indeks 0 & 1, Player 2: indeks 2 & 3, dst.
+            myClues.push(riddle.clues[(myPlayerOrder - 1) * 2]);
+            myClues.push(riddle.clues[(myPlayerOrder - 1) * 2 + 1]);
+        } else {
+            // Player 5 s/d 10 mendapatkan 2 petunjuk acak dari 8 petunjuk yang tersedia
+            const rand1 = Math.floor(Math.random() * 8);
+            let rand2 = Math.floor(Math.random() * 8);
+            while(rand1 === rand2) rand2 = Math.floor(Math.random() * 8); // Pastikan tidak kembar untuk diri sendiri
+            
+            myClues.push(riddle.clues[rand1]);
+            myClues.push(riddle.clues[rand2]);
+        }
+
+        // Tampilkan kartu bukti di layar (Menggunakan lazy loading bawaan browser)
+        myClues.forEach((text, i) => {
+            const card = document.createElement('div');
+            card.className = 'clue-card';
+            card.innerHTML = `
+                <img src="https://placehold.co/200x150/0f3460/ffffff?text=BUKTI+KARTU" loading="lazy" alt="clue">
+                <p style="margin:5px 0 0 0; line-height:1.3;"><b>${text.split(':')[0]}:</b>${text.split(':')[1]}</p>
+            `;
+            container.appendChild(card);
+        });
+    }
+
+    // SISTEM DISKUSI (REALTIME)
+    function sendChat() {
+        const input = document.getElementById('msgInput');
+        if(input.value.trim() === "") return;
+        
+        socket.emit('sendMessage', {
+            code: myRoomCode,
+            sender: `Detektif P${myPlayerOrder}`,
+            message: input.value
+        });
+        input.value = "";
+    }
+
+    socket.on('newMessage', (data) => {
+        const win = document.getElementById('chat-window');
+        win.innerHTML += `<div class="chat-bubble"><b style="color:var(--accent)">${data.sender}:</b> ${data.message}</div>`;
+        win.scrollTop = win.scrollHeight;
+    });
+
+    // SISTEM JAWABAN & SINKRONISASI LEVEL
+    function submitAnswer() {
+        const ans = document.getElementById('answerInput').value.trim();
+        if(ans === "") return alert("Isi jawaban terlebih dahulu!");
+
+        const dbIndex = activeRiddles[currentRiddleIndex];
+        const correctAnswer = riddleDatabase[dbIndex].solution;
+
+        if(ans.toLowerCase() === correctAnswer.toLowerCase()) {
+            socket.emit('correctAnswerSubmitted', myRoomCode);
+            document.getElementById('answerInput').value = "";
+        } else {
+            alert("❌ Analisis salah! Tersangka memiliki alibi kuat atau bukti tidak cocok. Diskusikan lagi!");
+        }
+    }
+
+    socket.on('nextLevel', () => {
+        currentRiddleIndex++;
+        if(currentRiddleIndex < 5) {
+            alert("🎉 BENAR! Tim Anda berhasil mengidentifikasi pelaku. Bersiap untuk kasus berikutnya!");
+            loadRiddle();
+        } else {
+            alert("🏆 LUAR BIASA! Tim Anda berhasil menyelesaikan seluruh 5 Kasus Pembunuhan dan memenangkan permainan!");
+            location.reload();
+        }
+    });
+</script>
+</body>
+  </html>
+              
